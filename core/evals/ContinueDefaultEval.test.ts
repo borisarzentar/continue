@@ -1,27 +1,39 @@
-const encoder = new GPTAsyncEncoder();
+// Right now the encoder processes keep running after the benchmark is done
+// and then jest process can't finish on its own.
+// In order to stop encoder processes we have to be able to access it.
+// We do that by replacing the encoder with our own encoder that does
+// the same thing as original, but we have control over it.
+// const encoder = new GPTAsyncEncoder();
 
-const testCountTokensAsync = async (content: MessageContent, modelName: string) => {
-  if (Array.isArray(content)) {
-    const promises = content.map(async (part) => {
-      if (part.type === "imageUrl") {
-        return countImageTokens(part);
-      }
-      return (await encoder.encode(part.text ?? "")).length;
-    });
-    return (await Promise.all(promises)).reduce((sum, val) => sum + val, 0);
-  }
-  return (await encoder.encode(content ?? "")).length;
-};
+// const testCountTokensAsync = async (content: MessageContent, modelName: string) => {
+//   if (Array.isArray(content)) {
+//     const promises = content.map(async (part) => {
+//       if (part.type === "imageUrl") {
+//         return countImageTokens(part);
+//       }
+//       return (await encoder.encode(part.text ?? "")).length;
+//     });
+//     return (await Promise.all(promises)).reduce((sum, val) => sum + val, 0);
+//   }
+//   return (await encoder.encode(content ?? "")).length;
+// };
 
-jest.mock("../llm/countTokens", () => {
-  const originalModule = jest.requireActual("../llm/countTokens");
+// jest.mock("../llm/countTokens", () => {
+//   const originalModule = jest.requireActual("../llm/countTokens");
 
-  return {
-    __esModule: true,
-    ...originalModule,
-    countTokensAsync: testCountTokensAsync,
-  };
-});
+//   return {
+//     __esModule: true,
+//     ...originalModule,
+//     countTokensAsync: testCountTokensAsync,
+//   };
+// });
+
+// function countImageTokens(content: MessagePart): number {
+//   if (content.type === "imageUrl") {
+//     return 85;
+//   }
+//   throw new Error("Non-image content type");
+// }
 
 import childProcess, { SpawnOptionsWithoutStdio } from "child_process";
 import { mkdirSync } from "fs";
@@ -32,10 +44,9 @@ import readline from "readline";
 import * as dotenv from "dotenv";
 import { AzureOpenAI } from "openai";
 
-import { BranchAndDir, MessageContent, MessagePart } from "..";
+import { BranchAndDir } from "..";
 import { RetrievalPipelineOptions } from "../context/retrieval/pipelines/BaseRetrievalPipeline";
 import { ContinueServerClient } from "../continueServer/stubs/client";
-import { GPTAsyncEncoder } from "../llm/asyncEncoder";
 import TransformersJsEmbeddingsProvider from "../llm/llms/TransformersJsEmbeddingsProvider";
 import { testIde, testConfigHandler, testLLM } from "../test/fixtures";
 import { setUpTestDir, tearDownTestDir, TEST_DIR, TEST_DIR_PATH } from "../test/testDir";
@@ -48,13 +59,6 @@ dotenv.config({
 
 testIde.getRepoName = () => Promise.resolve("test-repo");
 testIde.getBranch = () => Promise.resolve("main");
-
-function countImageTokens(content: MessagePart): number {
-  if (content.type === "imageUrl") {
-    return 85;
-  }
-  throw new Error("Non-image content type");
-}
 
 async function runProcess(command: string, args: string[], options: SpawnOptionsWithoutStdio) {
   const currentProcess = childProcess.spawn(command, args, options);
@@ -74,6 +78,7 @@ const openAIClient = new AzureOpenAI({
   apiVersion: LLM_VERSION,
 });
 
+// Use to test if LLM config is correct.
 // const completion = await openAIClient.chat.completions.create({
 //   model: "gpt-4o-mini",
 //   messages: [{
@@ -97,8 +102,9 @@ try {
 
 describe("ContinueDefaultEval", () => {
   afterAll(async () => {
-    await encoder.close();
-    await encoder.close();
+    // We have to close the encoder in order to stop all running processes and end the benchmark.
+    // Not working right now.
+    // await encoder.close();
   });
 
   it("runs", async () => {
