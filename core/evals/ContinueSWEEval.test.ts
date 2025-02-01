@@ -46,10 +46,13 @@ import { AzureOpenAI } from "openai";
 
 import { BranchAndDir } from "..";
 import { RetrievalPipelineOptions } from "../context/retrieval/pipelines/BaseRetrievalPipeline";
+import NoRerankerRetrievalPipeline from "../context/retrieval/pipelines/NoRerankerRetrievalPipeline";
 import { ContinueServerClient } from "../continueServer/stubs/client";
+import { CodebaseIndexer, PauseToken } from "../indexing/CodebaseIndexer";
 import TransformersJsEmbeddingsProvider from "../llm/llms/TransformersJsEmbeddingsProvider";
 import { testIde, testConfigHandler, testLLM } from "../test/fixtures";
-import { setUpTestDir, tearDownTestDir, TEST_DIR, TEST_DIR_PATH } from "../test/testDir";
+import { setUpTestDir, TEST_DIR_PATH } from "../test/testDir";
+import { localPathToUri } from "../util/pathToUri";
 
 import { PATCH_EXAMPLE } from "./constants";
 
@@ -66,6 +69,12 @@ async function runProcess(command: string, args: string[], options: SpawnOptions
   for await (const line of rl) {
     console.log("read: " + line);
   }
+  // rl.close();
+  rl.addListener("close", () => {
+    if (!currentProcess.killed) {
+      currentProcess.kill("SIGINT");
+    }
+  });
 }
 
 const LLM_ENDPOINT = process.env.LLM_ENDPOINT;
@@ -100,6 +109,13 @@ try {
   await writeFile(resultsFilePath, "{}");
 }
 
+interface RunInstance {
+  instance_id: string;
+  problem_statement: string;
+  repo: string;
+  base_commit: string;
+}
+
 describe("ContinueDefaultEval", () => {
   afterAll(async () => {
     // We have to close the encoder in order to stop all running processes and end the benchmark.
@@ -108,21 +124,86 @@ describe("ContinueDefaultEval", () => {
   });
 
   it("runs", async () => {
+    setUpTestDir();
     const { Database } = (await import("duckdb-async"));
-
     const db = await Database.create(path.resolve("../evals/datasets/SWE-bench_Lite/index.duckdb"));
 
-    const dataResults = Array.from(await db.all("SELECT * FROM data;"));
+    const dataResults = Array.from(await db.all("SELECT * FROM data;")) as RunInstance[];
 
-    for (const runInstance of dataResults.slice(0, 3)) { // Remove slice in order to run the whole benchmark.
-      tearDownTestDir();
-      setUpTestDir();
+    const indexingPauseToken = new PauseToken(false);
 
+    const continueServerClient = new ContinueServerClient(undefined, undefined);
+
+    const codebaseIndexer = new CodebaseIndexer(
+      testConfigHandler,
+      testIde,
+      indexingPauseToken,
+      continueServerClient
+    );
+
+    let runPromises = [];
+
+    for (const runInstance of dataResults) { // Remove slice in order to run the whole benchmark.
+      if (existingResults[runInstance.instance_id]) {
+        continue;
+      }
+
+      runPromises.push(run(codebaseIndexer, runInstance));
+
+      if (runPromises.length === 1) {
+        const results = await Promise.all(runPromises);
+        console.log("Results:", results);
+
+        await codebaseIndexer.clearIndexes();
+        runPromises = [];
+        setUpTestDir();
+      }
+    }
+
+    if (runPromises.length > 0) {
+      const results = await Promise.all(runPromises);
+      console.log("Results:", results);
+    }
+
+    async function run(codebaseIndexer: CodebaseIndexer, runInstance: RunInstance) {
       const repoName = runInstance.repo;
+      const baseCommit = runInstance.base_commit;
       const directoryName = repoName.replace("/", "-");
-      const localRepoPath = `${TEST_DIR_PATH}/${directoryName}`;
+      const localRepoPath = `${TEST_DIR_PATH}/${directoryName}/${baseCommit}`;
 
-      mkdirSync(localRepoPath);
+      await setupRepo(repoName, localRepoPath, baseCommit);
+
+      await run_indexation_and_retrieval(
+        codebaseIndexer,
+        runInstance.instance_id,
+        runInstance.problem_statement,
+        localRepoPath,
+        runInstance.base_commit,
+      );
+    }
+
+    // await runProcess(
+    //   "python",
+    //   [
+    //     "-m",
+    //     "swebench.harness.run_evaluation",
+    //     "--dataset_name",
+    //     "princeton-nlp/SWE-bench_Lite",
+    //     "--split",
+    //     "test",
+    //     "--predictions_path",
+    //     resultsFilePath,
+    //     "--max_workers",
+    //     "12",
+    //     "--run_id",
+    //     "continue_swe_bench",
+    //   ], {
+    //     cwd: path.resolve("../evals/results/SWE-bench_Lite"),
+    //   }
+    // );
+    
+    async function setupRepo(repoName: string, repoPath: string, baseCommit: string) {
+      mkdirSync(repoPath, { recursive: true });
 
       await runProcess(
         "git",
@@ -132,55 +213,31 @@ describe("ContinueDefaultEval", () => {
           `git@github.com:${repoName}.git`,
           ".",
         ], {
-          cwd: localRepoPath,
+          cwd: repoPath,
         },
       );
 
-      await runProcess("git", ["reset", "--hard", runInstance.base_commit], {
-        cwd: localRepoPath,
+      await runProcess("git", ["reset", "--hard", baseCommit], {
+        cwd: repoPath,
       });
-
-      await run_indexation_and_retrieval(runInstance.instance_id, runInstance.problem_statement);
     }
 
-    async function run_indexation_and_retrieval(instanceId: string, query: string) {
-      const { CodebaseIndexer, PauseToken } = await import("../indexing/CodebaseIndexer");
-      const NoRerankerRetrievalPipeline = (await import("../context/retrieval/pipelines/NoRerankerRetrievalPipeline")).default;
-
-      const indexingPauseToken = new PauseToken(false);
-
-      const continueServerClient = new ContinueServerClient(undefined, undefined);
-
-      const codebaseIndexer = new CodebaseIndexer(
-        testConfigHandler,
-        testIde,
-        indexingPauseToken,
-        continueServerClient
-      );
-
+    async function run_indexation_and_retrieval(codebaseIndexer: CodebaseIndexer, instanceId: string, query: string, repoPath: string, baseCommit: string) {
       async function refreshIndex() {
-        await codebaseIndexer.clearIndexes();
-
         const abortController = new AbortController();
         const abortSignal = abortController.signal;
 
-        const updates = [];
-
         for await (const update of codebaseIndexer.refreshDirs(
-          [TEST_DIR],
+          [localPathToUri(repoPath)],
           abortSignal,
-        )) {
-          updates.push(update);
-        }
-
-        return updates;
+        )) {}
       }
 
       await refreshIndex();
 
       const tags: BranchAndDir[] = [{
         branch: "main",
-        directory: TEST_DIR,
+        directory: localPathToUri(repoPath),
       }];
 
       const pipelineOptions: RetrievalPipelineOptions = {
@@ -207,16 +264,17 @@ describe("ContinueDefaultEval", () => {
         query: query,
       });
 
-      const systemMessage = `I need you to solve the GitHub issue by looking at the provided files retrieved from index and 
-generate a single patch file that I can apply directly to the repository using \`git apply\`. 
-Respond with a single patch file in the following format:
+      const systemMessage = `You are an expert programmer and personal assistant. You are asked to solve the following issue: ${query}
+I need you to solve the issue by looking at the provided context and generate a single patch that I can apply directly to the repository using \`git apply\`.
+Please respond only with a text formatted in git diff format. Do not give any explanation, but your code should perfectly satisfy the user request.
+Example patch file:
 ${PATCH_EXAMPLE}`;
 
-      const prompt = `The problem statement from GitHub issue is:
-${query}
-
-These are the relevant files:
-${results.map((result) => `${result.filepath}\n${result.content}`).join("\n\n")}`;
+      const prompt = `These are the relevant files:
+${results.map((result) => `${result.filepath.slice(
+  result.filepath.indexOf(baseCommit) + baseCommit.length + 1,
+  result.filepath.length)
+}\n${result.content}`).join("\n\n")}`;
 
       const codeCompletion = await openAIClient.chat.completions.create({
         model: "gpt-4o-mini",
