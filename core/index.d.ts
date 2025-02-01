@@ -216,19 +216,25 @@ export interface ContextSubmenuItem {
   metadata?: any;
 }
 
-export interface SiteIndexingConfig {
-  title: string;
-  startUrl: string;
-  rootUrl?: string;
-  maxDepth?: number;
-  faviconUrl?: string;
+export interface ContextSubmenuItemWithProvider extends ContextSubmenuItem {
+  providerTitle: string;
 }
 
 export interface SiteIndexingConfig {
-  startUrl: string;
-  rootUrl?: string;
   title: string;
+  startUrl: string;
   maxDepth?: number;
+  faviconUrl?: string;
+  useLocalCrawling?: boolean;
+  rootUrl?: string; // Currently only used by preindexed docs
+}
+
+export interface DocsIndexingDetails {
+  startUrl: string;
+  config: SiteIndexingConfig;
+  indexingStatus: IndexingStatus | undefined;
+  chunks: Chunk[];
+  isPreIndexedDoc: boolean;
 }
 
 export interface IContextProvider {
@@ -302,11 +308,17 @@ export interface CompletionOptions extends BaseCompletionOptions {
 
 export type ChatMessageRole = "user" | "assistant" | "system" | "tool";
 
-export interface MessagePart {
-  type: "text" | "imageUrl";
-  text?: string;
-  imageUrl?: { url: string };
-}
+export type TextMessagePart = {
+  type: "text";
+  text: string;
+};
+
+export type ImageMessagePart = {
+  type: "imageUrl";
+  imageUrl: { url: string };
+};
+
+export type MessagePart = TextMessagePart | ImageMessagePart;
 
 export type MessageContent = string | MessagePart[];
 
@@ -421,6 +433,13 @@ interface ToolCallState {
   output?: ContextItem[];
 }
 
+interface Reasoning {
+  active: boolean;
+  text: string;
+  startAt: number;
+  endAt?: number;
+}
+
 export interface ChatHistoryItem {
   message: ChatMessage;
   contextItems: ContextItemWithId[];
@@ -431,6 +450,7 @@ export interface ChatHistoryItem {
   isGatheringContext?: boolean;
   checkpoint?: Checkpoint;
   isBeforeCheckpoint?: boolean;
+  reasoning?: Reasoning;
 }
 
 export interface LLMFullCompletionOptions extends BaseCompletionOptions {
@@ -456,6 +476,7 @@ export interface LLMOptions {
   writeLog?: (str: string) => Promise<void>;
   llmRequestHook?: (model: string, prompt: string) => any;
   apiKey?: string;
+  apiKeyLocation?: string;
   aiGatewaySlug?: string;
   apiBase?: string;
   cacheBehavior?: CacheBehavior;
@@ -578,8 +599,8 @@ export interface IdeSettings {
   remoteConfigSyncPeriod: number;
   userToken: string;
   enableControlServerBeta: boolean;
+  continueTestEnvironment: "none" | "production" | "test" | "local";
   pauseCodebaseIndexOnStart: boolean;
-  enableDebugLogs: boolean;
 }
 
 export interface FileStats {
@@ -630,7 +651,7 @@ export interface IDE {
 
   openUrl(url: string): Promise<void>;
 
-  runCommand(command: string): Promise<void>;
+  runCommand(command: string, options?: TerminalOptions): Promise<void>;
 
   saveFile(fileUri: string): Promise<void>;
 
@@ -679,6 +700,11 @@ export interface IDE {
 
   getGitHubAuthToken(args: GetGhTokenArgs): Promise<string | undefined>;
 
+  // Secret Storage
+  readSecrets(keys: string[]): Promise<Record<string, string>>;
+
+  writeSecrets(secrets: { [key: string]: string }): Promise<void>;
+
   // LSP
   gotoDefinition(location: Location): Promise<RangeInFile[]>;
 
@@ -724,7 +750,6 @@ export type StepName =
 
 export type ContextProviderName =
   | "diff"
-  | "github"
   | "terminal"
   | "debugger"
   | "open"
@@ -751,6 +776,10 @@ export type ContextProviderName =
   | "issue"
   | "repo-map"
   | "url"
+  | "commit"
+  | "web"
+  | "discord"
+  | "clipboard"
   | string;
 
 export type TemplateType =
@@ -813,7 +842,7 @@ export interface SlashCommandDescription {
 export interface CustomCommand {
   name: string;
   prompt: string;
-  description: string;
+  description?: string;
 }
 
 export interface Prediction {
@@ -847,6 +876,13 @@ export interface Tool {
   uri?: string;
 }
 
+interface ToolChoice {
+  type: "function";
+  function: {
+    name: string;
+  };
+}
+
 export interface BaseCompletionOptions {
   temperature?: number;
   topP?: number;
@@ -864,6 +900,7 @@ export interface BaseCompletionOptions {
   stream?: boolean;
   prediction?: Prediction;
   tools?: Tool[];
+  toolChoice?: ToolChoice;
 }
 
 export interface ModelCapability {
@@ -875,6 +912,7 @@ export interface ModelDescription {
   provider: string;
   model: string;
   apiKey?: string;
+  apiKeyLocation?: string;
   apiBase?: string;
   contextLength?: number;
   maxStopWords?: number;
@@ -918,7 +956,6 @@ export interface RerankerDescription {
 
 export interface TabAutocompleteOptions {
   disable: boolean;
-  useFileSuffix: boolean;
   maxPromptTokens: number;
   debounceDelay: number;
   maxSuffixPercentage: number;
@@ -940,6 +977,7 @@ export interface StdioOptions {
   type: "stdio";
   command: string;
   args: string[];
+  env?: Record<string, string>;
 }
 
 export interface WebSocketOptions {
@@ -963,7 +1001,6 @@ export interface ContinueUIConfig {
   fontSize?: number;
   displayRawMarkdown?: boolean;
   showChatScrollbar?: boolean;
-  getChatTitles?: boolean;
   codeWrap?: boolean;
 }
 
@@ -1064,7 +1101,6 @@ export interface ExperimentalConfig {
    * This is needed to crawl a large number of documentation sites that are dynamically rendered.
    */
   useChromiumForDocsCrawling?: boolean;
-  useTools?: boolean;
   modelContextProtocolServers?: MCPOptions[];
 }
 
@@ -1191,6 +1227,8 @@ export interface BrowserSerializedContinueConfig {
   analytics?: AnalyticsConfig;
   docs?: SiteIndexingConfig[];
   tools: Tool[];
+  usePlatform: boolean;
+  tabAutocompleteOptions?: Partial<TabAutocompleteOptions>;
 }
 
 // DOCS SUGGESTIONS AND PACKAGE INFO
@@ -1229,3 +1267,8 @@ export type PackageDocsResult = {
   | { error: string; details?: never }
   | { details: PackageDetailsSuccess; error?: never }
 );
+
+export interface TerminalOptions {
+  reuseTerminal?: boolean;
+  terminalName?: string;
+}

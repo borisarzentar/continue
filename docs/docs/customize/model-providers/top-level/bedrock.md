@@ -22,12 +22,28 @@ We recommend configuring **Claude 3.5 Sonnet** as your chat model.
   ]
 }
 ```
+> If you run into the following error when connecting to the new Claude 3.5 Sonnet 2 models from AWS - `400 Invocation of model ID anthropic.claude-3-5-sonnet-20241022-v2:0 with on-demand throughput isn’t supported. Retry your request with the ID or ARN of an inference profile that contains this model.`
+
+> You can fix this using the following config.json
+```json title="config.json"
+{
+  "models": [
+    {
+      "title": "Claude 3.5 Sonnet",
+      "provider": "bedrock",
+      "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "region": "us-east-1",
+      "profile": "bedrock"
+    }
+  ]
+}
+```
 
 ## Autocomplete model
 
-Bedrock currently does not offer any autocomplete models.
+Bedrock currently does not offer any autocomplete models. However, [Codestral from Mistral](https://mistral.ai/news/codestral-2501/) and [Point from Poolisde](https://aws.amazon.com/bedrock/poolside/) will be supported in the near future.
 
-[Click here](../../model-types/autocomplete.md) to see a list of autocomplete model providers.
+In the meantime, you can view a list of autocomplete model providers [here](../../model-types/autocomplete.md).
 
 ## Embeddings model
 

@@ -99,7 +99,6 @@ export class VsCodeMessenger {
     });
 
     this.onWebview("toggleDevTools", (msg) => {
-      vscode.commands.executeCommand("workbench.action.toggleDevTools");
       vscode.commands.executeCommand("continue.viewLogs");
     });
     this.onWebview("reloadWindow", (msg) => {
@@ -447,7 +446,10 @@ export class VsCodeMessenger {
       ide.getGitHubAuthToken(msg.data),
     );
     this.onWebviewOrCore("getControlPlaneSessionInfo", async (msg) => {
-      return getControlPlaneSessionInfo(msg.data.silent);
+      return getControlPlaneSessionInfo(
+        msg.data.silent,
+        msg.data.useOnboarding,
+      );
     });
     this.onWebviewOrCore("logoutOfControlPlane", async (msg) => {
       const sessions = await this.workOsAuthProvider.getSessions();

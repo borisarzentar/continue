@@ -2,21 +2,24 @@ import path from "path";
 
 import { fetchwithRequestOptions } from "@continuedev/fetch";
 import ignore from "ignore";
+import * as URI from "uri-js";
 import { v4 as uuidv4 } from "uuid";
 
 import { CompletionProvider } from "./autocomplete/CompletionProvider";
 import { ConfigHandler } from "./config/ConfigHandler";
+import { SYSTEM_PROMPT_DOT_FILE } from "./config/getSystemPromptDotFile";
 import {
   setupBestConfig,
   setupLocalConfig,
   setupLocalConfigAfterFreeTrial,
   setupQuickstartConfig,
 } from "./config/onboarding";
-import { addModel, deleteModel } from "./config/util";
+import { addContextProvider, addModel, deleteModel } from "./config/util";
 import { recentlyEditedFilesCache } from "./context/retrieval/recentlyEditedFilesCache";
 import { ContinueServerClient } from "./continueServer/stubs/client";
 import { getAuthUrlForTokenPage } from "./control-plane/auth/index";
 import { ControlPlaneClient } from "./control-plane/client";
+import { getControlPlaneEnv } from "./control-plane/env";
 import { streamDiffLines } from "./edit/streamDiffLines";
 import { CodebaseIndexer, PauseToken } from "./indexing/CodebaseIndexer";
 import DocsService from "./indexing/docs/DocsService";
@@ -26,6 +29,7 @@ import Ollama from "./llm/llms/Ollama";
 import { createNewPromptFileV2 } from "./promptFiles/v2/createNewPromptFile";
 import { callTool } from "./tools/callTool";
 import { ChatDescriber } from "./util/chatDescriber";
+import { clipboardCache } from "./util/clipboardCache";
 import { logDevData } from "./util/devdata";
 import { DevDataSqliteDb } from "./util/devdataSqlite";
 import { GlobalContext } from "./util/GlobalContext";
@@ -35,17 +39,22 @@ import {
   getConfigJsonPath,
   setupInitialDotContinueDirectory,
 } from "./util/paths";
+import { localPathToUri } from "./util/pathToUri";
 import { Telemetry } from "./util/posthog";
 import { getSymbolsForManyFiles } from "./util/treeSitter";
 import { TTS } from "./util/tts";
 
-import { type ContextItemId, type IDE, type IndexingProgressUpdate } from ".";
-import type { FromCoreProtocol, ToCoreProtocol } from "./protocol";
+import {
+  ChatMessage,
+  DiffLine,
+  PromptLog,
+  type ContextItemId,
+  type IDE,
+  type IndexingProgressUpdate,
+} from ".";
 
-import * as URI from "uri-js";
-import { SYSTEM_PROMPT_DOT_FILE } from "./config/getSystemPromptDotFile";
+import type { FromCoreProtocol, ToCoreProtocol } from "./protocol";
 import type { IMessenger, Message } from "./protocol/messenger";
-import { localPathToUri } from "./util/pathToUri";
 
 export class Core {
   // implements IMessenger<ToCoreProtocol, FromCoreProtocol>
@@ -102,9 +111,13 @@ export class Core {
     const ideSettingsPromise = messenger.request("getIdeSettings", undefined);
     const sessionInfoPromise = messenger.request("getControlPlaneSessionInfo", {
       silent: true,
+      useOnboarding: false,
     });
 
-    this.controlPlaneClient = new ControlPlaneClient(sessionInfoPromise);
+    this.controlPlaneClient = new ControlPlaneClient(
+      sessionInfoPromise,
+      ideSettingsPromise,
+    );
 
     this.configHandler = new ConfigHandler(
       this.ide,
@@ -123,7 +136,7 @@ export class Core {
       const serializedResult = await this.configHandler.getSerializedConfig();
       this.messenger.send("configUpdate", {
         result: serializedResult,
-        profileId: this.configHandler.currentProfile.profileId,
+        profileId: this.configHandler.currentProfile.profileDescription.id,
       });
     });
 
@@ -276,8 +289,27 @@ export class Core {
     on("config/ideSettingsUpdate", (msg) => {
       this.configHandler.updateIdeSettings(msg.data);
     });
+
     on("config/listProfiles", (msg) => {
       return this.configHandler.listProfiles();
+    });
+
+    on("config/addContextProvider", async (msg) => {
+      addContextProvider(msg.data);
+    });
+
+    on("config/updateSharedConfig", async (msg) => {
+      this.globalContext.updateSharedConfig(msg.data);
+      await this.configHandler.reloadConfig();
+    });
+
+    on("controlPlane/openUrl", async (msg) => {
+      const env = await getControlPlaneEnv(this.ide.getIdeSettings());
+      await this.messenger.request("openUrl", `${env.APP_URL}${msg.data.path}`);
+    });
+
+    on("controlPlane/listOrganizations", async (msg) => {
+      return await this.controlPlaneClient.listOrganizations();
     });
 
     // Context providers
@@ -290,7 +322,7 @@ export class Core {
     });
 
     on("context/indexDocs", async (msg) => {
-      await this.docsService.syncOrReindexAllDocsWithPrompt(msg.data.reIndex);
+      await this.docsService.syncDocsWithPrompt(msg.data.reIndex);
     });
 
     on("context/loadSubmenuItems", async (msg) => {
@@ -373,15 +405,24 @@ export class Core {
     on("config/getSerializedProfileInfo", async (msg) => {
       return {
         result: await this.configHandler.getSerializedConfig(),
-        profileId: this.configHandler.currentProfile.profileId,
+        profileId: this.configHandler.currentProfile.profileDescription.id,
       };
+    });
+
+    on("clipboardCache/add", (msg) => {
+      const added = clipboardCache.add(uuidv4(), msg.data.content);
+      if (added) {
+        this.messenger.send("refreshSubmenuItems", {
+          providers: ["clipboard"],
+        });
+      }
     });
 
     async function* llmStreamChat(
       configHandler: ConfigHandler,
       abortedMessageIds: Set<string>,
       msg: Message<ToCoreProtocol["llm/streamChat"][0]>,
-    ) {
+    ): AsyncGenerator<ChatMessage, PromptLog> {
       const { config } = await configHandler.loadConfig();
       if (!config) {
         throw new Error("Config not loaded");
@@ -417,8 +458,7 @@ export class Core {
 
         const chunk = next.value;
 
-        // @ts-ignore
-        yield { content: chunk };
+        yield chunk;
         next = await gen.next();
       }
 
@@ -435,7 +475,11 @@ export class Core {
         true,
       );
 
-      return { done: true, content: next.value };
+      if (!next.done) {
+        throw new Error("Will never happen");
+      }
+
+      return next.value;
     }
 
     on("llm/streamChat", (msg) =>
@@ -445,9 +489,8 @@ export class Core {
     async function* llmStreamComplete(
       configHandler: ConfigHandler,
       abortedMessageIds: Set<string>,
-
       msg: Message<ToCoreProtocol["llm/streamComplete"][0]>,
-    ) {
+    ): AsyncGenerator<string, PromptLog> {
       const model = await configHandler.llmFromTitle(msg.data.title);
       const gen = model.streamComplete(
         msg.data.prompt,
@@ -469,11 +512,13 @@ export class Core {
           });
           break;
         }
-        yield { content: next.value };
+        yield next.value;
         next = await gen.next();
       }
-
-      return { done: true, content: next.value };
+      if (!next.done) {
+        throw new Error("This will never happen");
+      }
+      return next.value;
     }
 
     on("llm/streamComplete", (msg) =>
@@ -535,7 +580,7 @@ export class Core {
       abortedMessageIds: Set<string>,
       msg: Message<ToCoreProtocol["command/run"][0]>,
       messenger: IMessenger<ToCoreProtocol, FromCoreProtocol>,
-    ) {
+    ): AsyncGenerator<string> {
       const {
         input,
         history,
@@ -600,7 +645,7 @@ export class Core {
             break;
           }
           if (content) {
-            yield { content };
+            yield content;
           }
         }
       } catch (e) {
@@ -608,7 +653,6 @@ export class Core {
       } finally {
         clearInterval(checkActiveInterval);
       }
-      yield { done: true, content: "" };
     }
     on("command/run", (msg) =>
       runNodeJsSlashCommand(
@@ -639,7 +683,7 @@ export class Core {
       configHandler: ConfigHandler,
       abortedMessageIds: Set<string>,
       msg: Message<ToCoreProtocol["streamDiffLines"][0]>,
-    ) {
+    ): AsyncGenerator<DiffLine> {
       const data = msg.data;
       const llm = await configHandler.llmFromTitle(msg.data.modelTitle);
       for await (const diffLine of streamDiffLines(
@@ -654,11 +698,8 @@ export class Core {
           abortedMessageIds.delete(msg.messageId);
           break;
         }
-        console.log(diffLine);
-        yield { content: diffLine };
+        yield diffLine;
       }
-
-      return { done: true };
     }
 
     on("streamDiffLines", (msg) =>
@@ -818,7 +859,7 @@ export class Core {
     });
     on("indexing/setPaused", async (msg) => {
       if (msg.data.type === "docs") {
-        // this.docsService.setPaused(msg.data.id, msg.data.paused);
+        // this.docsService.setPaused(msg.data.id, msg.data.paused); // not supported yet
       }
     });
     on("docs/getSuggestedDocs", async (msg) => {
@@ -832,6 +873,9 @@ export class Core {
     on("docs/initStatuses", async (msg) => {
       void this.docsService.initStatuses();
     });
+    on("docs/getDetails", async (msg) => {
+      return await this.docsService.getDetails(msg.data.startUrl);
+    });
     //
 
     on("didChangeSelectedProfile", (msg) => {
@@ -842,7 +886,7 @@ export class Core {
       this.configHandler.updateControlPlaneSessionInfo(msg.data.sessionInfo);
     });
     on("auth/getAuthUrl", async (msg) => {
-      const url = await getAuthUrlForTokenPage();
+      const url = await getAuthUrlForTokenPage(ideSettingsPromise);
       return { url };
     });
 
@@ -937,7 +981,9 @@ export class Core {
       }
     }
 
-    this.messenger.send("refreshSubmenuItems", undefined);
+    this.messenger.send("refreshSubmenuItems", {
+      providers: "dependsOnIndexing",
+    });
     this.indexingCancellationController = undefined;
   }
 
@@ -968,7 +1014,9 @@ export class Core {
       }
     }
 
-    this.messenger.send("refreshSubmenuItems", undefined);
+    this.messenger.send("refreshSubmenuItems", {
+      providers: "dependsOnIndexing",
+    });
   }
 
   // private

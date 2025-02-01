@@ -39,6 +39,7 @@ export const OpenAIConfigSchema = BasePlusConfig.extend({
     z.literal("nvidia"),
     z.literal("fireworks"),
     z.literal("together"),
+    z.literal("novita"),
     z.literal("sambanova"),
     z.literal("nebius"),
     z.literal("function-network"),
@@ -53,6 +54,7 @@ export const OpenAIConfigSchema = BasePlusConfig.extend({
     z.literal("text-gen-webui"),
     z.literal("vllm"),
     z.literal("x-ai"),
+    z.literal("scaleway"),
   ]),
 });
 export type OpenAIConfig = z.infer<typeof OpenAIConfigSchema>;

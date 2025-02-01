@@ -22,6 +22,7 @@ interface ContinueInputBoxProps {
   editorState?: JSONContent;
   contextItems?: ContextItemWithId[];
   hidden?: boolean;
+  inputId: string; // used to keep track of things per input in redux
 }
 
 const EDIT_DISALLOWED_CONTEXT_PROVIDERS = [
@@ -81,9 +82,6 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
   const availableContextProviders = useAppSelector(
     (state) => state.config.config.contextProviders,
   );
-  const useTools = useAppSelector(
-    (state) => state.config.config.experimental?.useTools !== false,
-  );
   const editModeState = useAppSelector((state) => state.editModeState);
 
   const filteredSlashCommands = props.isEditMode ? [] : availableSlashCommands;
@@ -114,9 +112,7 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
         hideTools: true,
         enterText: editModeState.editStatus === "accepting" ? "Retry" : "Edit",
       }
-    : {
-        hideTools: !useTools,
-      };
+    : {};
 
   return (
     <div className={`${props.hidden ? "hidden" : ""}`}>
@@ -137,6 +133,7 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
             availableSlashCommands={filteredSlashCommands}
             historyKey={historyKey}
             toolbarOptions={toolbarOptions}
+            inputId={props.inputId}
           />
         </GradientBorder>
       </div>

@@ -1,29 +1,38 @@
+import {
+  OrganizationDescription,
+  ProfileDescription,
+} from "core/config/ProfileLifecycleManager";
+import { ControlPlaneSessionInfo } from "core/control-plane/client";
 import React, {
   createContext,
   useContext,
-  useState,
   useEffect,
   useMemo,
+  useState,
 } from "react";
-import { ControlPlaneSessionInfo } from "core/control-plane/client";
 import { useDispatch } from "react-redux";
+import AccountDialog from "../components/AccountDialog";
 import ConfirmationDialog from "../components/dialogs/ConfirmationDialog";
-import { IdeMessengerContext } from "./IdeMessenger";
+import { useWebviewListener } from "../hooks/useWebviewListener";
+import { useAppSelector } from "../redux/hooks";
+import { setLastControlServerBetaEnabledStatus } from "../redux/slices/miscSlice";
+import {
+  selectAvailableProfiles,
+  setAvailableProfiles,
+} from "../redux/slices/sessionSlice";
 import { setDialogMessage, setShowDialog } from "../redux/slices/uiSlice";
 import { getLocalStorage, setLocalStorage } from "../util/localStorage";
-import { ProfileDescription } from "core/config/ProfileLifecycleManager";
-import { setLastControlServerBetaEnabledStatus } from "../redux/slices/miscSlice";
-import { useWebviewListener } from "../hooks/useWebviewListener";
-import AccountDialog from "../components/AccountDialog";
-import { useAppSelector } from "../redux/hooks";
+import { IdeMessengerContext } from "./IdeMessenger";
 
 interface AuthContextType {
   session: ControlPlaneSessionInfo | undefined;
   logout: () => void;
-  login: () => void;
+  login: (useOnboarding: boolean) => Promise<boolean>;
   selectedProfile: ProfileDescription | undefined;
   profiles: ProfileDescription[];
   controlServerBetaEnabled: boolean;
+  organizations: OrganizationDescription[];
+  selectedOrganization: OrganizationDescription | undefined;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -34,7 +43,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [session, setSession] = useState<ControlPlaneSessionInfo | undefined>(
     undefined,
   );
-  const [profiles, setProfiles] = useState<ProfileDescription[]>([]);
+
+  const [organizations, setOrganizations] = useState<OrganizationDescription[]>(
+    [],
+  );
+
+  const ideMessenger = useContext(IdeMessengerContext);
+
+  const selectedOrganizationId = useAppSelector(
+    (store) => store.session.selectedOrganizationId,
+  );
+
+  const selectedOrganization = useMemo(() => {
+    return organizations.find((p) => p.id === selectedOrganizationId);
+  }, [organizations, selectedOrganizationId]);
+
+  const profiles = useAppSelector(selectAvailableProfiles);
+
   const selectedProfileId = useAppSelector(
     (store) => store.session.selectedProfileId,
   );
@@ -42,40 +67,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     return profiles.find((p) => p.id === selectedProfileId);
   }, [profiles, selectedProfileId]);
 
-  const ideMessenger = useContext(IdeMessengerContext);
   const dispatch = useDispatch();
 
-  const lastControlServerBetaEnabledStatus = useAppSelector(
-    (state) => state.misc.lastControlServerBetaEnabledStatus,
-  );
+  const login: AuthContextType["login"] = (useOnboarding: boolean) => {
+    return new Promise((resolve) => {
+      ideMessenger
+        .request("getControlPlaneSessionInfo", {
+          silent: false,
+          useOnboarding,
+        })
+        .then((result) => {
+          if (result.status === "error") {
+            resolve(false);
+            return;
+          }
 
-  const login = () => {
-    ideMessenger
-      .request("getControlPlaneSessionInfo", { silent: false })
-      .then((result) => {
-        if (result.status === "error") {
-          return;
-        }
-        const session = result.content;
-        setSession(session);
+          const session = result.content;
+          setSession(session);
 
-        // If this is the first time the user has logged in, explain how profiles work
-        if (!getLocalStorage("shownProfilesIntroduction")) {
-          dispatch(setShowDialog(true));
-          dispatch(
-            setDialogMessage(
-              <ConfirmationDialog
-                title="Welcome to Continue for Teams!"
-                text="You can switch between your local profile and team profile using the profile icon in the top right. Each profile defines a set of models, slash commands, context providers, and other settings to customize Continue."
-                hideCancelButton={true}
-                confirmText="Ok"
-                onConfirm={() => {}}
-              />,
-            ),
-          );
-          setLocalStorage("shownProfilesIntroduction", true);
-        }
-      });
+          // If this is the first time the user has logged in, explain how profiles work
+          if (!getLocalStorage("shownProfilesIntroduction")) {
+            dispatch(setShowDialog(true));
+            dispatch(
+              setDialogMessage(
+                <ConfirmationDialog
+                  title="Welcome to Continue for Teams!"
+                  text="You can switch between your local profile and team profile using the profile icon in the top right. Each profile defines a set of models, slash commands, context providers, and other settings to customize Continue."
+                  hideCancelButton={true}
+                  confirmText="Ok"
+                  onConfirm={() => {}}
+                />,
+              ),
+            );
+            setLocalStorage("shownProfilesIntroduction", true);
+          }
+
+          resolve(true);
+        });
+    });
   };
 
   const logout = () => {
@@ -102,12 +131,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   });
 
   useWebviewListener("signInToControlPlane", async () => {
-    login();
+    login(false);
   });
 
   useEffect(() => {
     ideMessenger
-      .request("getControlPlaneSessionInfo", { silent: true })
+      .request("getControlPlaneSessionInfo", {
+        silent: true,
+        useOnboarding: false,
+      })
       .then(
         (result) => result.status === "success" && setSession(result.content),
       );
@@ -117,17 +149,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     useState(false);
 
   useEffect(() => {
-    ideMessenger.ide.getIdeSettings().then(({ enableControlServerBeta }) => {
-      setControlServerBetaEnabled(enableControlServerBeta);
-      dispatch(setLastControlServerBetaEnabledStatus(enableControlServerBeta));
-
-      const shouldShowPopup =
-        !lastControlServerBetaEnabledStatus && enableControlServerBeta;
-      if (shouldShowPopup) {
-        ideMessenger.ide.showToast("info", "Continue for Teams enabled");
-      }
-    });
+    ideMessenger.ide
+      .getIdeSettings()
+      .then(({ enableControlServerBeta, continueTestEnvironment }) => {
+        const enabled =
+          enableControlServerBeta || continueTestEnvironment !== "none";
+        setControlServerBetaEnabled(enabled);
+        dispatch(setLastControlServerBetaEnabledStatus(enabled));
+      });
   }, []);
+
+  useEffect(() => {
+    if (session) {
+      ideMessenger
+        .request("controlPlane/listOrganizations", undefined)
+        .then((result) => {
+          if (result.status === "success") {
+            setOrganizations(result.content);
+          }
+        });
+    } else {
+      setOrganizations([]);
+    }
+  }, [session]);
 
   useWebviewListener(
     "didChangeIdeSettings",
@@ -145,14 +189,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     ideMessenger
       .request("config/listProfiles", undefined)
       .then(
-        (result) => result.status === "success" && setProfiles(result.content),
+        (result) =>
+          result.status === "success" &&
+          dispatch(setAvailableProfiles(result.content)),
       );
   }, []);
 
   useWebviewListener(
     "didChangeAvailableProfiles",
     async (data) => {
-      setProfiles(data.profiles);
+      dispatch(setAvailableProfiles(data.profiles));
     },
     [],
   );
@@ -165,6 +211,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         login,
         selectedProfile,
         profiles,
+        selectedOrganization,
+        organizations,
         controlServerBetaEnabled,
       }}
     >

@@ -74,6 +74,10 @@ export function getGlobalContextFilePath(): string {
   return path.join(getIndexFolderPath(), "globalContext.json");
 }
 
+export function getSharedConfigFilePath(): string {
+  return path.join(getContinueGlobalPath(), "sharedConfig.json");
+}
+
 export function getSessionFilePath(sessionId: string): string {
   return path.join(getSessionsFolderPath(), `${sessionId}.json`);
 }
@@ -301,11 +305,6 @@ export function getPathToRemoteConfig(remoteConfigServerUrl: string): string {
   return dir;
 }
 
-export function internalBetaPathExists(): boolean {
-  const sPath = path.join(getContinueGlobalPath(), ".internal_beta");
-  return fs.existsSync(sPath);
-}
-
 export function getConfigJsonPathForRemote(
   remoteConfigServerUrl: string,
 ): string {
@@ -332,15 +331,6 @@ export function getLogsDirPath(): string {
     fs.mkdirSync(logsPath);
   }
   return logsPath;
-}
-
-export function getLogFilePath(): string {
-  const logFilePath = path.join(getContinueGlobalPath(), "continue.log");
-  // Make sure the file/directory exist
-  if (!fs.existsSync(logFilePath)) {
-    fs.writeFileSync(logFilePath, "");
-  }
-  return logFilePath;
 }
 
 export function getCoreLogsPath(): string {

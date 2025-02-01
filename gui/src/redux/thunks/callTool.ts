@@ -14,7 +14,6 @@ export const callTool = createAsyncThunk<void, undefined, ThunkApiType>(
     const state = getState();
     const toolCallState = selectCurrentToolCall(state);
 
-    console.log("calling tool", toolCallState.toolCall);
     if (!toolCallState) {
       return;
     }

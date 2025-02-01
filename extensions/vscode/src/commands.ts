@@ -10,11 +10,7 @@ import { EXTENSION_NAME } from "core/control-plane/env";
 import { Core } from "core/core";
 import { walkDirAsync } from "core/indexing/walkDir";
 import { GlobalContext } from "core/util/GlobalContext";
-import {
-  getConfigJsonPath,
-  getDevDataFilePath,
-  getLogFilePath,
-} from "core/util/paths";
+import { getConfigJsonPath, getDevDataFilePath } from "core/util/paths";
 import { Telemetry } from "core/util/posthog";
 import readLastLines from "read-last-lines";
 import * as vscode from "vscode";
@@ -267,6 +263,10 @@ async function processDiff(
       status: "closed",
       numDiffs: 0,
     });
+  }
+
+  if (action === "accept") {
+    await sidebar.webviewProtocol.request("exitEditMode", undefined);
   }
 }
 
@@ -647,8 +647,7 @@ const getCommandsMap: (
     },
     "continue.viewLogs": async () => {
       captureCommandTelemetry("viewLogs");
-      const logFilePath = getLogFilePath();
-      await vscode.window.showTextDocument(vscode.Uri.file(logFilePath));
+      vscode.commands.executeCommand("workbench.action.toggleDevTools");
     },
     "continue.debugTerminal": async () => {
       captureCommandTelemetry("debugTerminal");
@@ -739,9 +738,11 @@ const getCommandsMap: (
       if (fullScreenTab && fullScreenPanel) {
         // Full screen open, but not focused - focus it
         fullScreenPanel.reveal();
-        vscode.commands.executeCommand("continue.focusContinueInput");
         return;
       }
+
+      // Clear the sidebar to prevent overwriting changes made in fullscreen
+      vscode.commands.executeCommand("continue.newSession");
 
       // Full screen not open - open it
       captureCommandTelemetry("openFullScreen");
@@ -767,7 +768,7 @@ const getCommandsMap: (
         true,
       );
 
-      panel.onDidChangeViewState(() => {
+      const sessionLoader = panel.onDidChangeViewState(() => {
         vscode.commands.executeCommand("continue.newSession");
         if (sessionId) {
           vscode.commands.executeCommand(
@@ -775,6 +776,7 @@ const getCommandsMap: (
             sessionId,
           );
         }
+        sessionLoader.dispose();
       });
 
       // When panel closes, reset the webview and focus
@@ -790,10 +792,8 @@ const getCommandsMap: (
       vscode.commands.executeCommand("workbench.action.copyEditorToNewWindow");
       vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
     },
-    "continue.openConfig": () => {
-      core.invoke("config/openProfile", {
-        profileId: undefined,
-      });
+    "continue.openConfigPage": () => {
+      vscode.commands.executeCommand("continue.navigateTo", "/config", true);
     },
     "continue.selectFilesAsContext": async (
       firstUri: vscode.Uri,
@@ -1001,7 +1001,10 @@ const getCommandsMap: (
   };
 };
 
-const registerCopyBufferSpy = (context: vscode.ExtensionContext) => {
+const registerCopyBufferSpy = (
+  context: vscode.ExtensionContext,
+  core: Core,
+) => {
   const typeDisposable = vscode.commands.registerCommand(
     "editor.action.clipboardCopyAction",
     async (arg) => doCopy(typeDisposable),
@@ -1013,6 +1016,12 @@ const registerCopyBufferSpy = (context: vscode.ExtensionContext) => {
     await vscode.commands.executeCommand("editor.action.clipboardCopyAction");
 
     const clipboardText = await vscode.env.clipboard.readText();
+
+    if (clipboardText) {
+      core.invoke("clipboardCache/add", {
+        content: clipboardText,
+      });
+    }
 
     await context.workspaceState.update("continue.copyBuffer", {
       text: clipboardText,
@@ -1043,7 +1052,7 @@ export function registerAllCommands(
   core: Core,
   editDecorationManager: EditDecorationManager,
 ) {
-  registerCopyBufferSpy(context);
+  registerCopyBufferSpy(context, core);
 
   for (const [command, callback] of Object.entries(
     getCommandsMap(

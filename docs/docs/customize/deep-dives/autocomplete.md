@@ -23,7 +23,7 @@ If you want to have the best autocomplete experience, we recommend using Codestr
 If you'd like to run your autocomplete model locally, we recommend using Ollama. To do this, first download the latest version of Ollama from [here](https://ollama.ai). Then, run the following command to download our recommended model:
 
 ```bash
-ollama run qwen2.5-coder:1.5b
+ollama run qwen2.5-coder:1.5b-base
 ```
 
 Once it has been downloaded, you should begin to see completions in VS Code.
@@ -37,7 +37,7 @@ All of the configuration options available for chat models are available to use 
     "tabAutocompleteModel": {
         "title": "Tab Autocomplete Model",
         "provider": "ollama",
-        "model": "qwen2.5-coder:1.5b",
+        "model": "qwen2.5-coder:1.5b-base",
         "apiBase": "https://<my endpoint>"
     },
     ...
@@ -58,16 +58,15 @@ This is just another object like the ones in the `"models"` array of `config.jso
 
 This object allows you to customize the behavior of tab-autocomplete. The available options are shown below, and you can find their default values [here](https://github.com/continuedev/continue/blob/fbeb2e4fe15d4b434a30a136f74b672485c852d9/core/util/parameters.ts).
 
-- `disable`: Disable autocomplete (can also be done from IDE settings)
+- `disable`: Disable autocomplete (can also be done from IDE settings) (default: `false`)
 - `template`: An optional template string to be used for autocomplete. It will be rendered with the Mustache templating language, and is passed the 'prefix' and 'suffix' variables. (String)
-- `useFileSuffix`: Determines whether to use the file suffix in the prompt. (Boolean)
-- `maxPromptTokens`: The maximum number of prompt tokens to use. A smaller number will yield faster completions, but less context. (Number)
-- `prefixPercentage`: The percentage of the input that should be dedicated to the prefix. (Number)
-- `maxSuffixPercentage`: The maximum percentage of the prompt that can be dedicated to the suffix. (Number)
-- `debounceDelay`: The delay in milliseconds before triggering autocomplete after a keystroke. (Number)
-- `multilineCompletions`: Whether to enable multiline completions ("always", "never", or "auto"). Defaults to "auto".
-- `useCache`: Whether to cache and reuse completions when the prompt is the same as a previous one. May be useful to disable for testing purposes.
-- `disableInFiles`: A list of glob patterns for files in which you want to disable tab autocomplete.
+- `maxPromptTokens`: The maximum number of prompt tokens to use. A smaller number will yield faster completions, but less context. (Number) (default: `1024`)
+- `prefixPercentage`: The percentage of the input that should be dedicated to the prefix. (Number) (default: `0.3`)
+- `maxSuffixPercentage`: The maximum percentage of the prompt that can be dedicated to the suffix. (Number) (default: `0.2`)
+- `debounceDelay`: The delay in milliseconds before triggering autocomplete after a keystroke. (Number) (default: `350`)
+- `multilineCompletions`: Whether to enable multiline completions ("always", "never", or "auto"). Defaults to "auto". (default: `auto`)
+- `useCache`: Whether to cache and reuse completions when the prompt is the same as a previous one. May be useful to disable for testing purposes. (default: `true`)
+- `disableInFiles`: A list of glob patterns for files in which you want to disable tab autocomplete. (default: `[]`)
 
 ### Full example
 
@@ -76,7 +75,7 @@ This object allows you to customize the behavior of tab-autocomplete. The availa
   "tabAutocompleteModel": {
     "title": "Tab Autocomplete Model",
     "provider": "ollama",
-    "model": "qwen2.5-coder:1.5b",
+    "model": "qwen2.5-coder:1.5b-base",
     "apiBase": "https://<my endpoint>"
   },
   "tabAutocompleteOptions": {
@@ -99,7 +98,7 @@ Follow these steps to ensure that everything is set up correctly:
 
 1. Make sure you have the "Enable Tab Autocomplete" setting checked (in VS Code, you can toggle by clicking the "Continue" button in the status bar, and in JetBrains by going to Settings -> Tools -> Continue).
 2. Make sure you have downloaded Ollama.
-3. Run `ollama run qwen2.5-coder:1.5b` to verify that the model is downloaded.
+3. Run `ollama run qwen2.5-coder:1.5b-base` to verify that the model is downloaded.
 4. Make sure that any other completion providers are disabled (e.g. Copilot), as they may interfere.
 5. Check the output of the logs to find any potential errors: <kbd>cmd/ctrl</kbd> + <kbd>shift</kbd> + <kbd>P</kbd> -> "Toggle Developer Tools" -> "Console" tab in VS Code, ~/.continue/logs/core.log in JetBrains.
 6. Check VS Code settings to make sure that `"editor.inlineSuggest.enabled"` is set to `true` (use <kbd>cmd/ctrl</kbd> + <kbd>,</kbd> then search for this and check the box)

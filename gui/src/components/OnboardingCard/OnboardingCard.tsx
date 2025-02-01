@@ -20,7 +20,11 @@ export interface OnboardingCardState {
   activeTab?: TabTitle;
 }
 
-export function OnboardingCard() {
+interface OnboardingCardProps {
+  isDialog?: boolean;
+}
+
+export function OnboardingCard({ isDialog }: OnboardingCardProps) {
   const onboardingCard = useOnboardingCard();
 
   function renderTabContent() {
@@ -41,14 +45,19 @@ export function OnboardingCard() {
   }
 
   return (
-    <StyledCard className="xs:py-4 xs:px-4 relative px-2 py-3">
+    <StyledCard
+      className="xs:py-4 xs:px-4 relative px-2 py-3"
+      data-testid="onboarding-card"
+    >
       <OnboardingCardTabs
         activeTab={onboardingCard.activeTab || "Best"}
         onTabClick={onboardingCard.setActiveTab}
       />
-      <CloseButton onClick={onboardingCard.close}>
-        <XMarkIcon className="mt-1.5 hidden h-5 w-5 hover:brightness-125 sm:flex" />
-      </CloseButton>
+      {!isDialog && (
+        <CloseButton onClick={() => onboardingCard.close()}>
+          <XMarkIcon className="mt-1.5 hidden h-5 w-5 hover:brightness-125 sm:flex" />
+        </CloseButton>
+      )}
       <div className="content py-4">{renderTabContent()}</div>
     </StyledCard>
   );

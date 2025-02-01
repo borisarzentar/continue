@@ -49,6 +49,7 @@ const CHAT_ONLY_MODELS = [
   "gpt-4o-mini",
   "o1-preview",
   "o1-mini",
+  "o3-mini"
 ];
 
 const formatMessageForO1 = (messages: ChatCompletionMessageParam[]) => {
@@ -92,8 +93,8 @@ class OpenAI extends BaseLLM {
     return model;
   }
 
-  private isO1Model(model?: string): boolean {
-    return !!model && model.startsWith("o1");
+  private isO3orO1Model(model?: string): boolean {
+    return !!model && (model.startsWith("o1") || model.startsWith("o3"));
   }
 
   protected supportsPrediction(model: string): boolean {
@@ -111,6 +112,10 @@ class OpenAI extends BaseLLM {
         strict: tool.function.strict,
       },
     };
+  }
+
+  protected extraBodyProperties(): Record<string, any> {
+    return {};
   }
 
   protected getMaxStopWords(): number {
@@ -140,14 +145,18 @@ class OpenAI extends BaseLLM {
 
     finalOptions.stop = options.stop?.slice(0, this.getMaxStopWords());
 
-    // OpenAI o1-preview and o1-mini:
-    if (this.isO1Model(options.model)) {
+    // OpenAI o1-preview and o1-mini or o3-mini:
+    if (this.isO3orO1Model(options.model)) {
       // a) use max_completion_tokens instead of max_tokens
       finalOptions.max_completion_tokens = options.maxTokens;
       finalOptions.max_tokens = undefined;
 
       // b) don't support system message
       finalOptions.messages = formatMessageForO1(finalOptions.messages);
+    }
+
+    if (options.model === "o1") {
+      finalOptions.stream = false;
     }
 
     if (options.prediction && this.supportsPrediction(options.model)) {
@@ -231,14 +240,19 @@ class OpenAI extends BaseLLM {
   ): ChatCompletionCreateParams {
     body.stop = body.stop?.slice(0, this.getMaxStopWords());
 
-    // OpenAI o1-preview and o1-mini:
-    if (this.isO1Model(body.model)) {
+    // OpenAI o1-preview and o1-mini or o3-mini:
+    if (this.isO3orO1Model(body.model)) {
       // a) use max_completion_tokens instead of max_tokens
       body.max_completion_tokens = body.max_tokens;
       body.max_tokens = undefined;
 
       // b) don't support system message
       body.messages = formatMessageForO1(body.messages);
+    }
+
+    if (body.model === "o1") {
+      // o1 doesn't support streaming
+      body.stream = false;
     }
 
     if (body.prediction && this.supportsPrediction(body.model)) {
@@ -251,6 +265,13 @@ class OpenAI extends BaseLLM {
         body.frequency_penalty = undefined;
       }
       body.max_completion_tokens = undefined;
+    }
+
+    if (body.tools?.length) {
+      // To ensure schema adherence: https://platform.openai.com/docs/guides/function-calling#parallel-function-calling-and-structured-outputs
+      // In practice, setting this to true and asking for multiple tool calls
+      // leads to "arguments" being something like '{"file": "test.ts"}{"file": "test.js"}'
+      body.parallel_tool_calls = false;
     }
 
     return body;
@@ -271,6 +292,7 @@ class OpenAI extends BaseLLM {
       body: JSON.stringify({
         ...args,
         stream: true,
+        ...this.extraBodyProperties(),
       }),
       signal,
     });
@@ -309,18 +331,13 @@ class OpenAI extends BaseLLM {
 
     const body = this._convertArgs(options, messages);
 
-    // Empty messages cause an error in LM Studio
-    body.messages = body.messages.map((m: any) => ({
-      ...m,
-      content: m.content === "" ? " " : m.content,
-      // We call it toolCalls, they call it tool_calls
-      tool_calls: m.toolCalls,
-      tool_call_id: m.toolCallId,
-    })) as any;
     const response = await this.fetch(this._getEndpoint("chat/completions"), {
       method: "POST",
       headers: this._getHeaders(),
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...body,
+        ...this.extraBodyProperties(),
+      }),
       signal,
     });
 
@@ -359,6 +376,7 @@ class OpenAI extends BaseLLM {
         presence_penalty: options.presencePenalty,
         stop: options.stop,
         stream: true,
+        ...this.extraBodyProperties(),
       }),
       headers: {
         "Content-Type": "application/json",
@@ -405,6 +423,7 @@ class OpenAI extends BaseLLM {
       body: JSON.stringify({
         input: chunks,
         model: this.model,
+        ...this.extraBodyProperties(),
       }),
       headers: {
         Authorization: `Bearer ${this.apiKey}`,

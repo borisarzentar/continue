@@ -13,7 +13,6 @@ const config = {
     experimental_faster: true,
   },
 
-
   title: "Continue",
   tagline:
     "the open-source library for accelerating software development with language models",
@@ -388,7 +387,11 @@ const config = {
           },
           {
             to: "/customize/model-providers/more/together",
-            from: "/reference/Model Providers/togetherllm",
+            from: "/reference/Model Providers/together",
+          },
+          {
+            to: "/customize/model-providers/more/novita",
+            from: "/reference/Model Providers/novita",
           },
           {
             to: "/customize/model-providers/more/vllm",
